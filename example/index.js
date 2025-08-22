@@ -5,17 +5,16 @@ import {
 	Scene,
 	WebGLRenderer,
 	PerspectiveCamera,
+	OrthographicCamera,
 	DirectionalLight,
 	AmbientLight,
 	Sphere,
-	BoxGeometry,
-	MeshBasicMaterial,
-	Mesh,
 	Vector3,
 } from 'three';
 import { OrbitControls } from 'three/examples/jsm/controls/OrbitControls.js';
+import { GUI } from 'three/examples/jsm/libs/lil-gui.module.min.js';
 
-let camera, controls, scene, renderer, tiles;
+let camera, orthoCamera, controls, scene, renderer, tiles;
 
 const params = {
 	enableDebug: true,
@@ -23,6 +22,7 @@ const params = {
 	displaySphereBounds: true,
 	errorTarget: 6,
 	maxDepth: 15,
+	orthographic: false,
 };
 
 init();
@@ -32,6 +32,7 @@ function init() {
 	// Initialize three.js scene
 	scene = new Scene();
 	camera = new PerspectiveCamera(75, window.innerWidth / window.innerHeight, 0.1, 1000000);
+	orthoCamera = new OrthographicCamera();
 	renderer = new WebGLRenderer({ antialias: true });
 
 	renderer.setSize(window.innerWidth, window.innerHeight);
@@ -95,6 +96,14 @@ function init() {
 
 	// Handle window resize
 	window.addEventListener('resize', onWindowResize);
+	
+	// Add GUI
+	const gui = new GUI();
+	gui.add(params, 'orthographic').name('Orthographic Camera');
+	gui.add(params, 'enableDebug').name('Enable Debug');
+	gui.add(params, 'displayBoxBounds').name('Box Bounds');
+	gui.add(params, 'displaySphereBounds').name('Sphere Bounds');
+	gui.open();
 }
 
 function loadTiles() {
@@ -130,13 +139,19 @@ function loadTiles() {
 			console.log('Bounding sphere:', sphere);
 			tiles.group.position.copy(sphere.center).multiplyScalar(-1);
 			
-			// Position camera appropriately
-			const distance = sphere.radius * 2;
-			camera.position.set(distance, distance, distance);
+			// Calculate camera distance to fit model in ~80% of view
+			// Using FOV and sphere radius to calculate optimal distance
+			const fov = camera.fov * (Math.PI / 180); // Convert to radians
+			const fitHeightDistance = sphere.radius / (Math.tan(fov / 2) * 0.8); // 0.8 for 80% screen coverage
+			const fitWidthDistance = sphere.radius / (Math.tan(fov / 2) * camera.aspect * 0.8);
+			const distance = Math.max(fitHeightDistance, fitWidthDistance) * 1.2; // Add 20% margin
+			
+			// Position camera at calculated distance
+			camera.position.set(distance, distance * 0.5, distance);
 			camera.lookAt(0, 0, 0);
 			controls.update();
 			
-			console.log('Camera positioned at distance:', distance);
+			console.log('Camera positioned at distance:', distance, 'for 80% screen coverage');
 		}
 	});
 
@@ -156,9 +171,26 @@ function onWindowResize() {
 	camera.aspect = window.innerWidth / window.innerHeight;
 	camera.updateProjectionMatrix();
 	renderer.setSize(window.innerWidth, window.innerHeight);
+	updateOrthoCamera();
 	if (tiles) {
-		tiles.setResolutionFromRenderer(camera, renderer);
+		const activeCamera = params.orthographic ? orthoCamera : camera;
+		tiles.setResolutionFromRenderer(activeCamera, renderer);
 	}
+}
+
+function updateOrthoCamera() {
+	orthoCamera.position.copy(camera.position);
+	orthoCamera.rotation.copy(camera.rotation);
+	
+	const scale = camera.position.distanceTo(controls.target) / 2.0;
+	const aspect = window.innerWidth / window.innerHeight;
+	orthoCamera.left = -aspect * scale;
+	orthoCamera.right = aspect * scale;
+	orthoCamera.bottom = -scale;
+	orthoCamera.top = scale;
+	orthoCamera.near = camera.near;
+	orthoCamera.far = camera.far;
+	orthoCamera.updateProjectionMatrix();
 }
 
 function animate() {
@@ -168,6 +200,19 @@ function animate() {
 	controls.update();
 
 	if (tiles) {
+		// Handle camera switching
+		const activeCamera = params.orthographic ? orthoCamera : camera;
+		
+		if (params.orthographic) {
+			tiles.deleteCamera(camera);
+			tiles.setCamera(orthoCamera);
+			tiles.setResolutionFromRenderer(orthoCamera, renderer);
+		} else {
+			tiles.deleteCamera(orthoCamera);
+			tiles.setCamera(camera);
+			tiles.setResolutionFromRenderer(camera, renderer);
+		}
+		
 		// Update tiles properties
 		tiles.errorTarget = params.errorTarget;
 		tiles.maxDepth = params.maxDepth;
@@ -182,8 +227,10 @@ function animate() {
 
 		// Update tiles - camera matrix must be up to date
 		camera.updateMatrixWorld();
+		orthoCamera.updateMatrixWorld();
+		updateOrthoCamera();
 		tiles.update();
 	}
 
-	renderer.render(scene, camera);
+	renderer.render(scene, params.orthographic ? orthoCamera : camera);
 }
